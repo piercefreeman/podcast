@@ -29,11 +29,15 @@ class UploadJob:
     destination_folder_id: str
 
 
-def collect_upload_candidates(episode_groups: list[EpisodeGroup]) -> dict[Path, list[Path]]:
+def collect_upload_candidates(
+    episode_groups: list[EpisodeGroup],
+) -> dict[Path, list[Path]]:
     candidates: dict[Path, list[Path]] = {}
     for group in episode_groups:
         files: list[Path] = []
-        for path in sorted(group.episode_dir.iterdir(), key=lambda item: item.name.lower()):
+        for path in sorted(
+            group.episode_dir.iterdir(), key=lambda item: item.name.lower()
+        ):
             if not path.is_file():
                 continue
             suffix = path.suffix.lower()
@@ -63,7 +67,9 @@ def iter_asset_children(client: Any, parent_asset_id: str) -> list[dict[str, Any
     return list(children)
 
 
-def ensure_remote_episode_folder(client: Any, parent_asset_id: str, episode_name: str) -> str:
+def ensure_remote_episode_folder(
+    client: Any, parent_asset_id: str, episode_name: str
+) -> str:
     for child in iter_asset_children(client, parent_asset_id):
         if child.get("type") == "folder" and child.get("name") == episode_name:
             return child["id"]
@@ -76,7 +82,9 @@ def ensure_remote_episode_folder(client: Any, parent_asset_id: str, episode_name
     return created["id"]
 
 
-def upload_file_to_frameio(client: Any, destination_folder_id: str, local_file: Path) -> dict[str, Any]:
+def upload_file_to_frameio(
+    client: Any, destination_folder_id: str, local_file: Path
+) -> dict[str, Any]:
     file_info = client.assets.build_asset_info(str(local_file))
     mimetype = file_info["mimetype"] or "application/octet-stream"
 
@@ -107,7 +115,9 @@ def upload_episode_files_to_frameio(
     try:
         from frameioclient import FrameioClient
     except ImportError as exc:
-        console.print(f"Failed to import frameioclient: {exc}", style="bold red", markup=False)
+        console.print(
+            f"Failed to import frameioclient: {exc}", style="bold red", markup=False
+        )
         return 1
 
     try:
@@ -122,7 +132,9 @@ def upload_episode_files_to_frameio(
         return 1
 
     try:
-        destination_root_id = resolve_frameio_destination_folder_id(client, destination_id)
+        destination_root_id = resolve_frameio_destination_folder_id(
+            client, destination_id
+        )
     except Exception as exc:
         console.print(
             f"Failed to resolve FRAMEIO_DESTINATION_ID '{destination_id}': {exc}",
@@ -134,7 +146,9 @@ def upload_episode_files_to_frameio(
     upload_jobs: list[UploadJob] = []
     for episode_dir in sorted(upload_candidates, key=lambda item: item.name.lower()):
         try:
-            remote_folder_id = ensure_remote_episode_folder(client, destination_root_id, episode_dir.name)
+            remote_folder_id = ensure_remote_episode_folder(
+                client, destination_root_id, episode_dir.name
+            )
         except Exception as exc:
             console.print(
                 f"Failed to create/find remote folder '{episode_dir.name}': {exc}",

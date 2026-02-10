@@ -134,7 +134,7 @@ struct ContentView: View {
                             availableWindows = await captureManager.fetchAvailableWindowsWithThumbnails()
                             isLoading = false
                         }
-                    }) {
+                    }, label: {
                         HStack(spacing: 6) {
                             Image(systemName: "arrow.clockwise")
                             Text("Refresh")
@@ -144,7 +144,7 @@ struct ContentView: View {
                         .background(Color.secondary.opacity(0.1))
                         .foregroundColor(.primary)
                         .cornerRadius(8)
-                    }
+                    })
                     .buttonStyle(.plain)
 
                     if isMirroring {
@@ -153,7 +153,7 @@ struct ContentView: View {
                             windowManager.closeMirrorWindow()
                             isMirroring = false
                             selectedWindowID = nil
-                        }) {
+                        }, label: {
                             HStack(spacing: 6) {
                                 Image(systemName: "stop.fill")
                                 Text("Stop Mirror")
@@ -163,7 +163,7 @@ struct ContentView: View {
                             .background(Color.red)
                             .foregroundColor(.white)
                             .cornerRadius(8)
-                        }
+                        })
                         .buttonStyle(.plain)
                     } else {
                         Button(action: {
@@ -179,7 +179,7 @@ struct ContentView: View {
                                     isMirroring = true
                                 }
                             }
-                        }) {
+                        }, label: {
                             HStack(spacing: 6) {
                                 Image(systemName: "play.fill")
                                 Text("Start Mirror")
@@ -189,7 +189,7 @@ struct ContentView: View {
                             .background(selectedWindowID != nil ? Color.accentColor : Color.gray)
                             .foregroundColor(.white)
                             .cornerRadius(8)
-                        }
+                        })
                         .buttonStyle(.plain)
                         .disabled(selectedWindowID == nil)
                     }

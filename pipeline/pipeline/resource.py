@@ -50,7 +50,9 @@ class EpisodeGroup:
     files: list[MediaFile]
 
 
-def discover_sources(audiohijack_path: Path, volumes_root: Path = Path("/Volumes")) -> list[SourceOption]:
+def discover_sources(
+    audiohijack_path: Path, volumes_root: Path = Path("/Volumes")
+) -> list[SourceOption]:
     options = [SourceOption(name="AudioHijack", path=audiohijack_path, selected=True)]
 
     if volumes_root.exists():
@@ -155,7 +157,9 @@ def scan_sources_for_today_files(
     return sorted(all_files, key=lambda media: media.created_at)
 
 
-def group_files_by_start_time(files: list[MediaFile], window: timedelta) -> list[MediaGroup]:
+def group_files_by_start_time(
+    files: list[MediaFile], window: timedelta
+) -> list[MediaGroup]:
     grouped_by_source: dict[str, deque[MediaFile]] = defaultdict(deque)
     for file in sorted(files, key=lambda item: item.created_at):
         grouped_by_source[file.source].append(file)
@@ -278,7 +282,9 @@ def move_groups_to_episodes(
     ) as progress:
         move_task = progress.add_task("Moving files", total=total_files)
         move_jobs: list[tuple[int, MediaFile, Path]] = []
-        for group_index, (group, episode_dir) in enumerate(zip(groups, episode_directories)):
+        for group_index, (group, episode_dir) in enumerate(
+            zip(groups, episode_directories)
+        ):
             if not dry_run:
                 episode_dir.mkdir(parents=True, exist_ok=False)
 
@@ -303,7 +309,9 @@ def move_groups_to_episodes(
         move_failures: list[str] = []
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             for group_index, file, destination in move_jobs:
-                future = executor.submit(move_file_to_destination, file.path, destination)
+                future = executor.submit(
+                    move_file_to_destination, file.path, destination
+                )
                 future_map[future] = (group_index, file)
 
             for future in as_completed(future_map):
@@ -412,11 +420,15 @@ def convert_mov_files(episode_groups: list[EpisodeGroup], dry_run: bool = False)
         TimeElapsedColumn(),
         console=console,
     ) as progress:
-        convert_task = progress.add_task("Converting .mov to _HQ.mp4", total=len(mov_files))
+        convert_task = progress.add_task(
+            "Converting .mov to _HQ.mp4", total=len(mov_files)
+        )
 
         for mov_file in mov_files:
             output_path = mov_file.with_name(f"{mov_file.stem}_HQ.mp4")
-            progress.console.print(f"\nConverting: {mov_file} -> {output_path}", style="bold")
+            progress.console.print(
+                f"\nConverting: {mov_file} -> {output_path}", style="bold"
+            )
 
             if dry_run:
                 progress.advance(convert_task)

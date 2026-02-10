@@ -49,7 +49,9 @@ def parse_toggle_indices(raw: str, max_index: int) -> set[int]:
 
 def prompt_for_sources(options: list[SourceOption]) -> list[SourceOption]:
     while True:
-        console.print("\nSelectable sources (toggle with comma-separated indices):", style="bold")
+        console.print(
+            "\nSelectable sources (toggle with comma-separated indices):", style="bold"
+        )
         for index, option in enumerate(options, start=1):
             checked = "x" if option.selected else " "
             availability = "" if option.path.exists() else " (missing path)"
@@ -66,7 +68,9 @@ def prompt_for_sources(options: list[SourceOption]) -> list[SourceOption]:
             selected = [option for option in options if option.selected]
             if selected:
                 return selected
-            console.print("Select at least one source before continuing.", style="bold red")
+            console.print(
+                "Select at least one source before continuing.", style="bold red"
+            )
             continue
 
         try:
@@ -85,7 +89,9 @@ def normalize_selected_sources(sources: list[SourceOption]) -> list[SourceOption
         if source.path.exists():
             valid_sources.append(source)
         else:
-            console.print(f"Skipping missing source path: {source.path}", style="yellow")
+            console.print(
+                f"Skipping missing source path: {source.path}", style="yellow"
+            )
     return valid_sources
 
 
