@@ -159,7 +159,7 @@ requires-dist = [
     { name = "pydantic-settings", specifier = ">=2.12.0" },
     { name = "rich", specifier = ">=13.7.0" },
     { name = "urllib3", specifier = "<2" },
-    { name = "vaultdantic" },
+    { name = "vaultdantic", specifier = ">=0.1.1" },
 ]
 
 [[package]]
@@ -340,16 +340,16 @@ wheels = [
 
 [[package]]
 name = "vaultdantic"
-version = "0.1.0"
+version = "0.1.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pydantic" },
     { name = "pydantic-settings" },
     { name = "python-dotenv" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/e0/63/c6645448e8d0b7eb1958d48285cea40c9352c43234234b5c71e78a7b082d/vaultdantic-0.1.0.tar.gz", hash = "sha256:60407660edb647f06efa6b9065f61f5a0e095ec62e3a13ef64ad9291f7033a08", size = 11444, upload-time = "2026-02-10T17:36:39.896Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/5d/06/24af17820b77e4d3d2ce83d4d3a8b0e901bf06eb95d5ace803b5a6ad5ef5/vaultdantic-0.1.1.tar.gz", hash = "sha256:da98d8a110e572a890bc5d5f7353d893c470d9fc906bee170cde8898aede1997", size = 11443, upload-time = "2026-02-10T17:55:12.258Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ab/aa/96bc7d82c07a522ebe5329708b8a69caa75e895427fccb471b69b7f300c5/vaultdantic-0.1.0-py3-none-any.whl", hash = "sha256:ae333f633251ee338ba50445f784a21c9972b8ab40ff3702b762f0de34d35f36", size = 13580, upload-time = "2026-02-10T17:36:38.871Z" },
+    { url = "https://files.pythonhosted.org/packages/33/7b/866ea36e11cd52fafcd9f6a5f011c85fe411102891ad9181d1d256933639/vaultdantic-0.1.1-py3-none-any.whl", hash = "sha256:6eec065c1228464b24ccd7ca1f4d28bbd059a284ae4bdeff484adee0b5f5bb50", size = 13582, upload-time = "2026-02-10T17:55:10.859Z" },
 ]
 
 [[package]]
