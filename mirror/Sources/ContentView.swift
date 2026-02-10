@@ -1,11 +1,22 @@
 import SwiftUI
 import ScreenCaptureKit
+import AppKit
+
+struct DisplayInfo: Identifiable {
+    let id: UInt32
+    let name: String
+    let isMain: Bool
+}
 
 struct ContentView: View {
     @StateObject private var captureManager = ScreenCaptureManager()
     @StateObject private var windowManager = MirrorWindowManager()
     @State private var availableWindows: [WindowInfo] = []
+    @State private var availableDisplays: [DisplayInfo] = []
     @State private var selectedWindowID: UInt32?
+    @State private var selectedDisplayID: UInt32?
+    @State private var horizontalFlip = true
+    @State private var verticalFlip = false
     @State private var isLoading = true
     @State private var isMirroring = false
 
@@ -25,6 +36,51 @@ struct ContentView: View {
             }
             .padding(.top, 24)
             .padding(.bottom, 20)
+
+            if !availableDisplays.isEmpty {
+                VStack(spacing: 12) {
+                    HStack {
+                        Text("Mirror display")
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundColor(.secondary)
+
+                        Spacer()
+
+                        Picker("Mirror display", selection: $selectedDisplayID) {
+                            ForEach(availableDisplays) { display in
+                                Text(display.isMain ? "\(display.name) (Main)" : display.name)
+                                    .tag(Optional(display.id))
+                            }
+                        }
+                        .pickerStyle(.menu)
+                        .frame(maxWidth: 260, alignment: .trailing)
+                    }
+
+                    HStack(spacing: 10) {
+                        Text("Mirror controls")
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundColor(.secondary)
+
+                        Spacer()
+
+                        FlipButton(
+                            icon: "arrow.left.and.right",
+                            label: "Horizontal",
+                            isActive: horizontalFlip,
+                            action: { horizontalFlip.toggle() }
+                        )
+
+                        FlipButton(
+                            icon: "arrow.up.and.down",
+                            label: "Vertical",
+                            isActive: verticalFlip,
+                            action: { verticalFlip.toggle() }
+                        )
+                    }
+                }
+                .padding(.horizontal, 20)
+                .padding(.bottom, 12)
+            }
 
             Divider()
 
@@ -114,7 +170,12 @@ struct ContentView: View {
                             if let windowInfo = availableWindows.first(where: { $0.id == selectedWindowID }) {
                                 Task {
                                     await captureManager.startCapture(for: windowInfo.window)
-                                    windowManager.openMirrorWindow(captureManager: captureManager)
+                                    windowManager.openMirrorWindow(
+                                        captureManager: captureManager,
+                                        displayID: selectedDisplayID,
+                                        horizontalFlip: $horizontalFlip,
+                                        verticalFlip: $verticalFlip
+                                    )
                                     isMirroring = true
                                 }
                             }
@@ -138,10 +199,42 @@ struct ContentView: View {
         }
         .frame(width: 700, height: 600)
         .onAppear {
+            refreshDisplays()
             Task {
                 availableWindows = await captureManager.fetchAvailableWindowsWithThumbnails()
                 isLoading = false
             }
+        }
+        .onReceive(NotificationCenter.default.publisher(
+            for: NSApplication.didChangeScreenParametersNotification
+        )) { _ in
+            refreshDisplays()
+        }
+    }
+
+    private func refreshDisplays() {
+        let screens = NSScreen.screens
+        availableDisplays = screens.enumerated().compactMap { index, screen in
+            guard let displayID = screen.displayID else { return nil }
+            let resolvedName = screen.localizedName.isEmpty ? "Display \(index + 1)" : screen.localizedName
+            return DisplayInfo(
+                id: displayID,
+                name: resolvedName,
+                isMain: screen == NSScreen.main
+            )
+        }
+
+        if let selectedDisplayID,
+           availableDisplays.contains(where: { $0.id == selectedDisplayID }) {
+            return
+        }
+
+        if let nonMainDisplay = availableDisplays.first(where: { !$0.isMain }) {
+            selectedDisplayID = nonMainDisplay.id
+        } else if let mainDisplay = availableDisplays.first(where: { $0.isMain }) {
+            selectedDisplayID = mainDisplay.id
+        } else {
+            selectedDisplayID = availableDisplays.first?.id
         }
     }
 }

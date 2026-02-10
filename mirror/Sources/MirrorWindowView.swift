@@ -2,8 +2,9 @@ import SwiftUI
 
 struct MirrorWindowView: View {
     @ObservedObject var captureManager: ScreenCaptureManager
-    @State private var horizontalFlip = true
-    @State private var verticalFlip = false
+    @Binding var horizontalFlip: Bool
+    @Binding var verticalFlip: Bool
+    var showsControls = true
     @State private var isHovering = false
 
     var body: some View {
@@ -30,40 +31,44 @@ struct MirrorWindowView: View {
                 }
             }
 
-            // Hover overlay controls
-            VStack {
-                HStack(spacing: 10) {
-                    FlipButton(
-                        icon: "arrow.left.and.right",
-                        label: "Horizontal",
-                        isActive: horizontalFlip,
-                        action: { horizontalFlip.toggle() }
-                    )
+            if showsControls {
+                // Hover overlay controls
+                VStack {
+                    HStack(spacing: 10) {
+                        FlipButton(
+                            icon: "arrow.left.and.right",
+                            label: "Horizontal",
+                            isActive: horizontalFlip,
+                            action: { horizontalFlip.toggle() }
+                        )
 
-                    FlipButton(
-                        icon: "arrow.up.and.down",
-                        label: "Vertical",
-                        isActive: verticalFlip,
-                        action: { verticalFlip.toggle() }
+                        FlipButton(
+                            icon: "arrow.up.and.down",
+                            label: "Vertical",
+                            isActive: verticalFlip,
+                            action: { verticalFlip.toggle() }
+                        )
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 12)
+                    .background(
+                        RoundedRectangle(cornerRadius: 12)
+                            .fill(.ultraThinMaterial)
+                            .shadow(color: .black.opacity(0.3), radius: 10, x: 0, y: 4)
                     )
+                    .opacity(isHovering ? 1 : 0)
+                    .animation(.easeInOut(duration: 0.25), value: isHovering)
+
+                    Spacer()
                 }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 12)
-                .background(
-                    RoundedRectangle(cornerRadius: 12)
-                        .fill(.ultraThinMaterial)
-                        .shadow(color: .black.opacity(0.3), radius: 10, x: 0, y: 4)
-                )
-                .opacity(isHovering ? 1 : 0)
-                .animation(.easeInOut(duration: 0.25), value: isHovering)
-
-                Spacer()
+                .padding(20)
             }
-            .padding(20)
         }
         .frame(minWidth: 400, minHeight: 300)
         .onHover { hovering in
-            isHovering = hovering
+            if showsControls {
+                isHovering = hovering
+            }
         }
     }
 }
