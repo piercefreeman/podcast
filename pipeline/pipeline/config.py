@@ -4,7 +4,7 @@ import re
 from datetime import timedelta
 from pathlib import Path
 
-from pydantic import SecretStr, ValidationError
+from pydantic import SecretStr, ValidationError, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from vaultdantic import OnePasswordConfigDict, VaultMixin
 
@@ -50,7 +50,15 @@ class FrameioSettings(BaseSettings, VaultMixin):
     )
 
     token: SecretStr
-    destination_id: str
+    destination_name: str
+
+    @field_validator("destination_name")
+    @classmethod
+    def validate_destination_name(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("FRAMEIO_DESTINATION_NAME cannot be empty.")
+        return normalized
 
 
 def load_frameio_settings() -> FrameioSettings:
@@ -61,7 +69,11 @@ def load_frameio_settings() -> FrameioSettings:
         for error in exc.errors():
             location = error.get("loc", [])
             if location:
-                missing_keys.append(f"FRAMEIO_{location[0].upper()}")
+                field_name = location[0]
+                if field_name == "token":
+                    missing_keys.append("FRAMEIO_TOKEN")
+                if field_name == "destination_name":
+                    missing_keys.append("FRAMEIO_DESTINATION_NAME")
         if missing_keys:
             missing = ", ".join(sorted(set(missing_keys)))
             raise RuntimeError(

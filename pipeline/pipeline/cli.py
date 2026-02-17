@@ -18,7 +18,7 @@ from .config import (
     load_frameio_settings,
     parse_duration,
 )
-from .frame import upload_episode_files_to_frameio
+from .frame import build_frameio_upload_context, upload_episode_files_to_frameio
 from .resource import (
     EpisodeGroup,
     MediaGroup,
@@ -144,6 +144,18 @@ def run(
         style="green",
     )
 
+    frameio_context = None
+    if not skip_frameio_upload:
+        try:
+            frameio_context = build_frameio_upload_context(
+                token=frameio_settings.token.get_secret_value(),
+                destination_name=frameio_settings.destination_name,
+            )
+        except RuntimeError as exc:
+            console.print(str(exc), style="bold red", markup=False)
+            return 1
+        console.print("Frame.io destination preflight check passed.", style="green")
+
     source_options = discover_sources(audiohijack_path)
     if all_volumes:
         for option in source_options:
@@ -258,7 +270,8 @@ def run(
         upload_code = upload_episode_files_to_frameio(
             [episode_group],
             token=frameio_settings.token.get_secret_value(),
-            destination_id=frameio_settings.destination_id,
+            destination_name=frameio_settings.destination_name,
+            context=frameio_context,
         )
         if upload_code != 0:
             return upload_code
@@ -335,7 +348,7 @@ def run(
 @click.option(
     "--dry-run",
     is_flag=True,
-    help="Show planned actions but do not move files, run ffmpeg, or upload to Frame.io.",
+    help="Show planned actions but do not copy files, run ffmpeg, or upload to Frame.io.",
 )
 @click.option(
     "--skip-frameio-upload",

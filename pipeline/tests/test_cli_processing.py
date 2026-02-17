@@ -16,7 +16,12 @@ class _FakeToken:
 
 class _FakeFrameioSettings:
     token = _FakeToken()
-    destination_id = "destination"
+    destination_name = "Podcast Ingest"
+
+
+class _FakeFrameioContext:
+    client = object()
+    destination_root_id = "root"
 
 
 class CliProcessingOrderTests(unittest.TestCase):
@@ -87,10 +92,14 @@ class CliProcessingOrderTests(unittest.TestCase):
             return 0
 
         def upload_side_effect(
-            episode_groups: list[EpisodeGroup], token: str, destination_id: str
+            episode_groups: list[EpisodeGroup],
+            token: str,
+            destination_name: str,
+            context: _FakeFrameioContext | None = None,
         ) -> int:
             self.assertEqual(token, "token")
-            self.assertEqual(destination_id, "destination")
+            self.assertEqual(destination_name, "Podcast Ingest")
+            self.assertIsNotNone(context)
             self.assertEqual(len(episode_groups), 1)
             events.append(("upload", episode_groups[0].episode_dir.name))
             return 0
@@ -113,6 +122,10 @@ class CliProcessingOrderTests(unittest.TestCase):
             patch("pipeline.cli.align_groups_by_media_duration", return_value={}),
             patch("pipeline.cli.print_group_table", return_value=None),
             patch("pipeline.cli.find_existing_episode_numbers", return_value=[45]),
+            patch(
+                "pipeline.cli.build_frameio_upload_context",
+                return_value=_FakeFrameioContext(),
+            ) as preflight_mock,
             patch("pipeline.cli.sys.stdin.isatty", return_value=True),
             patch("pipeline.cli.Confirm.ask", return_value=True) as confirm_mock,
             patch(
@@ -144,6 +157,10 @@ class CliProcessingOrderTests(unittest.TestCase):
         self.assertEqual(move_mock.call_count, 2)
         self.assertEqual(convert_mock.call_count, 2)
         self.assertEqual(upload_mock.call_count, 2)
+        preflight_mock.assert_called_once_with(
+            token="token",
+            destination_name="Podcast Ingest",
+        )
         confirm_mock.assert_called_once()
         delete_mock.assert_called_once()
         delete_paths = delete_mock.call_args.args[0]
@@ -186,6 +203,10 @@ class CliProcessingOrderTests(unittest.TestCase):
             patch("pipeline.cli.align_groups_by_media_duration", return_value={}),
             patch("pipeline.cli.print_group_table", return_value=None),
             patch("pipeline.cli.find_existing_episode_numbers", return_value=[45]),
+            patch(
+                "pipeline.cli.build_frameio_upload_context",
+                return_value=_FakeFrameioContext(),
+            ) as preflight_mock,
             patch("pipeline.cli.Confirm.ask", return_value=True) as confirm_mock,
             patch("pipeline.cli.move_groups_to_episodes", return_value=[]) as move_mock,
             patch("pipeline.cli.convert_mov_files", return_value=0) as convert_mock,
@@ -207,10 +228,66 @@ class CliProcessingOrderTests(unittest.TestCase):
             )
 
         self.assertEqual(exit_code, 0)
+        preflight_mock.assert_called_once_with(
+            token="token",
+            destination_name="Podcast Ingest",
+        )
         move_mock.assert_called_once_with(groups, Path("/podcast"), dry_run=True)
         convert_mock.assert_not_called()
         upload_mock.assert_not_called()
         confirm_mock.assert_not_called()
+        delete_mock.assert_not_called()
+
+    def test_run_skip_upload_bypasses_frameio_preflight(self) -> None:
+        source = SourceOption(name="AudioHijack", path=Path("."), selected=True)
+        day_file = MediaFile(
+            source="AudioHijack",
+            path=Path("/audio/input.wav"),
+            created_at=datetime(2026, 2, 16, 12, 17, 33),
+        )
+        groups = [
+            MediaGroup(start_time=datetime(2026, 2, 16, 12, 17, 33), files=[day_file]),
+        ]
+
+        with (
+            patch(
+                "pipeline.cli.load_frameio_settings",
+                return_value=_FakeFrameioSettings(),
+            ),
+            patch("pipeline.cli.discover_sources", return_value=[source]),
+            patch("pipeline.cli.scan_sources_for_today_files", return_value=[day_file]),
+            patch("pipeline.cli.group_files_by_start_time", return_value=groups),
+            patch("pipeline.cli.align_groups_by_media_duration", return_value={}),
+            patch("pipeline.cli.print_group_table", return_value=None),
+            patch("pipeline.cli.find_existing_episode_numbers", return_value=[45]),
+            patch(
+                "pipeline.cli.build_frameio_upload_context",
+                return_value=_FakeFrameioContext(),
+            ) as preflight_mock,
+            patch("pipeline.cli.move_groups_to_episodes", return_value=[]) as move_mock,
+            patch("pipeline.cli.convert_mov_files", return_value=0) as convert_mock,
+            patch(
+                "pipeline.cli.upload_episode_files_to_frameio", return_value=0
+            ) as upload_mock,
+            patch(
+                "pipeline.cli.delete_original_media_files", return_value=(0, [])
+            ) as delete_mock,
+        ):
+            exit_code = run(
+                start_window=timedelta(minutes=5),
+                podcast_root=Path("/podcast"),
+                audiohijack_path=Path("/audio"),
+                all_volumes=False,
+                yes=True,
+                dry_run=True,
+                skip_frameio_upload=True,
+            )
+
+        self.assertEqual(exit_code, 0)
+        preflight_mock.assert_not_called()
+        move_mock.assert_called_once()
+        convert_mock.assert_not_called()
+        upload_mock.assert_not_called()
         delete_mock.assert_not_called()
 
 
