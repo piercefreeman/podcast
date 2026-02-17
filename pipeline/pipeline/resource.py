@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
-from collections import defaultdict, deque
+from functools import lru_cache
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -18,7 +18,7 @@ from rich.progress import (
     TimeElapsedColumn,
 )
 
-from .config import EPISODE_PATTERN
+from .config import AUDIO_EXTENSIONS, EPISODE_PATTERN
 
 console = Console()
 
@@ -48,6 +48,17 @@ class EpisodeGroup:
     episode_dir: Path
     start_time: datetime
     files: list[MediaFile]
+
+
+MEDIA_DURATION_EXTENSIONS = AUDIO_EXTENSIONS | {
+    ".avi",
+    ".m4v",
+    ".mkv",
+    ".mov",
+    ".mp4",
+    ".mxf",
+}
+SPILLOVER_WINDOW = timedelta(hours=6)
 
 
 def discover_sources(
@@ -83,6 +94,55 @@ def safe_created_at(path: Path) -> datetime | None:
     return datetime.fromtimestamp(created_ts)
 
 
+def is_media_file(path: Path) -> bool:
+    return path.suffix.lower() in MEDIA_DURATION_EXTENSIONS
+
+
+@lru_cache(maxsize=4096)
+def safe_media_duration_seconds(path: Path) -> float | None:
+    if not is_media_file(path):
+        return None
+    if shutil.which("ffprobe") is None:
+        return None
+
+    command = [
+        "ffprobe",
+        "-v",
+        "error",
+        "-show_entries",
+        "format=duration",
+        "-of",
+        "default=noprint_wrappers=1:nokey=1",
+        str(path),
+    ]
+    try:
+        completed = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+    if completed.returncode != 0:
+        return None
+
+    raw_duration = completed.stdout.strip()
+    if not raw_duration:
+        return None
+
+    try:
+        duration = float(raw_duration)
+    except ValueError:
+        return None
+
+    if duration <= 0:
+        return None
+    return duration
+
+
 def scan_source_for_today_files(
     source: SourceOption,
     day_start: datetime,
@@ -94,6 +154,8 @@ def scan_source_for_today_files(
     matches: list[MediaFile] = []
 
     for file_path in iter_files(source.path):
+        if not is_media_file(file_path):
+            continue
         checked_since_update += 1
         if checked_since_update >= 50:
             progress.update(task_id, advance=checked_since_update)
@@ -157,46 +219,283 @@ def scan_sources_for_today_files(
     return sorted(all_files, key=lambda media: media.created_at)
 
 
+def align_groups_by_media_duration(
+    groups: list[MediaGroup],
+    selected_sources: list[SourceOption],
+    day_matched_files: list[MediaFile],
+    day_start: datetime,
+    day_end: datetime,
+) -> dict[str, int]:
+    if not groups:
+        return {}
+
+    def _is_better_state(
+        left: tuple[int, float, float], right: tuple[int, float, float] | None
+    ) -> bool:
+        if right is None:
+            return True
+        if left[0] != right[0]:
+            return left[0] > right[0]
+        if left[1] != right[1]:
+            return left[1] < right[1]
+        return left[2] < right[2]
+
+    def _score_candidate_to_anchor(
+        media_file: MediaFile,
+        duration: float,
+        anchor_index: int,
+        group_anchor_times: list[datetime],
+        group_targets: list[float | None],
+    ) -> tuple[float, float] | None:
+        target_duration = group_targets[anchor_index]
+        if target_duration is None:
+            return None
+        duration_delta = abs(duration - target_duration)
+        max_allowed_delta = max(5.0, target_duration * 0.25)
+        if duration_delta > max_allowed_delta:
+            return None
+
+        # Duration drives matching; datetime breaks ties for candidates in one source.
+        time_delta = abs(
+            (media_file.created_at - group_anchor_times[anchor_index]).total_seconds()
+        )
+        return duration_delta, time_delta
+
+    def _select_monotonic_matches(
+        candidates: list[MediaFile],
+        allowed_anchor_indices: list[int],
+        group_anchor_times: list[datetime],
+        group_targets: list[float | None],
+    ) -> list[tuple[int, MediaFile]]:
+        if not candidates or not allowed_anchor_indices:
+            return []
+
+        sorted_candidates = sorted(candidates, key=lambda item: item.created_at)
+        matchable_candidates: list[tuple[MediaFile, float]] = []
+        for media_file in sorted_candidates:
+            duration = safe_media_duration_seconds(media_file.path)
+            if duration is None:
+                continue
+            matchable_candidates.append((media_file, duration))
+
+        candidate_count = len(matchable_candidates)
+        anchor_count = len(allowed_anchor_indices)
+        if candidate_count == 0 or anchor_count == 0:
+            return []
+
+        dp: list[list[tuple[int, float, float] | None]] = [
+            [None] * (anchor_count + 1) for _ in range(candidate_count + 1)
+        ]
+        prev: list[list[tuple[str, int, int] | None]] = [
+            [None] * (anchor_count + 1) for _ in range(candidate_count + 1)
+        ]
+        dp[0][0] = (0, 0.0, 0.0)
+
+        for candidate_index in range(candidate_count + 1):
+            for anchor_pos in range(anchor_count + 1):
+                state = dp[candidate_index][anchor_pos]
+                if state is None:
+                    continue
+
+                if candidate_index < candidate_count:
+                    next_state = state
+                    existing = dp[candidate_index + 1][anchor_pos]
+                    if _is_better_state(next_state, existing):
+                        dp[candidate_index + 1][anchor_pos] = next_state
+                        prev[candidate_index + 1][anchor_pos] = (
+                            "skip_candidate",
+                            candidate_index,
+                            anchor_pos,
+                        )
+
+                if anchor_pos < anchor_count:
+                    next_state = state
+                    existing = dp[candidate_index][anchor_pos + 1]
+                    if _is_better_state(next_state, existing):
+                        dp[candidate_index][anchor_pos + 1] = next_state
+                        prev[candidate_index][anchor_pos + 1] = (
+                            "skip_anchor",
+                            candidate_index,
+                            anchor_pos,
+                        )
+
+                if candidate_index < candidate_count and anchor_pos < anchor_count:
+                    media_file, duration = matchable_candidates[candidate_index]
+                    anchor_index = allowed_anchor_indices[anchor_pos]
+                    score = _score_candidate_to_anchor(
+                        media_file,
+                        duration,
+                        anchor_index,
+                        group_anchor_times,
+                        group_targets,
+                    )
+                    if score is None:
+                        continue
+                    next_state = (
+                        state[0] + 1,
+                        state[1] + score[0],
+                        state[2] + score[1],
+                    )
+                    existing = dp[candidate_index + 1][anchor_pos + 1]
+                    if _is_better_state(next_state, existing):
+                        dp[candidate_index + 1][anchor_pos + 1] = next_state
+                        prev[candidate_index + 1][anchor_pos + 1] = (
+                            "match",
+                            candidate_index,
+                            anchor_pos,
+                        )
+
+        matches: list[tuple[int, MediaFile]] = []
+        candidate_index = candidate_count
+        anchor_pos = anchor_count
+        while candidate_index > 0 or anchor_pos > 0:
+            step = prev[candidate_index][anchor_pos]
+            if step is None:
+                break
+            action, previous_candidate_index, previous_anchor_pos = step
+            if action == "match":
+                anchor_index = allowed_anchor_indices[previous_anchor_pos]
+                media_file, _ = matchable_candidates[previous_candidate_index]
+                matches.append((anchor_index, media_file))
+            candidate_index = previous_candidate_index
+            anchor_pos = previous_anchor_pos
+
+        matches.reverse()
+        return matches
+
+    day_files_by_source: dict[str, list[MediaFile]] = {}
+    for media_file in day_matched_files:
+        day_files_by_source.setdefault(media_file.source, []).append(media_file)
+
+    primary_source_name = None
+    if day_files_by_source:
+        primary_source_name = max(
+            day_files_by_source.items(), key=lambda item: len(item[1])
+        )[0]
+    if primary_source_name is None:
+        return {}
+
+    # Keep only primary-source files in scaffold groups; everything else gets
+    # reattached by duration to these primary anchors.
+    for group in groups:
+        group.files = [
+            file for file in group.files if file.source == primary_source_name
+        ]
+    groups[:] = [group for group in groups if group.files]
+    groups.sort(key=lambda group: group.start_time)
+    if not groups:
+        return {}
+
+    group_anchor_times = [group.start_time for group in groups]
+    group_targets: list[float | None] = []
+    for group in groups:
+        durations = [
+            duration
+            for duration in (
+                safe_media_duration_seconds(media_file.path)
+                for media_file in group.files
+            )
+            if duration is not None
+        ]
+        group_targets.append(max(durations) if durations else None)
+    if all(target is None for target in group_targets):
+        return {}
+
+    primary_anchor_indices = [
+        index for index, target in enumerate(group_targets) if target is not None
+    ]
+
+    spillover_start = day_start - SPILLOVER_WINDOW
+    spillover_end = day_end + SPILLOVER_WINDOW
+
+    matches_from_outside_day_filter: dict[str, int] = {}
+    for source in selected_sources:
+        if source.name == primary_source_name:
+            continue
+
+        source_day_files = day_files_by_source.get(source.name, [])
+
+        candidate_by_path: dict[Path, MediaFile] = {
+            media_file.path: media_file for media_file in source_day_files
+        }
+
+        # Also include near-midnight spillover files around the selected day.
+        for file_path in iter_files(source.path):
+            if not is_media_file(file_path):
+                continue
+            created_at = safe_created_at(file_path)
+            if created_at is None:
+                continue
+
+            if source_day_files:
+                if created_at < spillover_start or created_at >= spillover_end:
+                    continue
+
+            candidate_by_path.setdefault(
+                file_path,
+                MediaFile(source=source.name, path=file_path, created_at=created_at),
+            )
+
+        all_candidates = list(candidate_by_path.values())
+        monotonic_matches = _select_monotonic_matches(
+            all_candidates,
+            primary_anchor_indices,
+            group_anchor_times,
+            group_targets,
+        )
+        for anchor_index, media_file in monotonic_matches:
+            groups[anchor_index].files.append(media_file)
+        outside_matches = [
+            media_file
+            for _, media_file in monotonic_matches
+            if media_file.created_at < day_start or media_file.created_at >= day_end
+        ]
+        if outside_matches:
+            matches_from_outside_day_filter[source.name] = len(outside_matches)
+
+    for group in groups:
+        group.files.sort(key=lambda item: item.created_at)
+
+    groups[:] = [group for group in groups if group.files]
+    groups.sort(key=lambda group: group.start_time)
+    return matches_from_outside_day_filter
+
+
 def group_files_by_start_time(
     files: list[MediaFile], window: timedelta
 ) -> list[MediaGroup]:
-    grouped_by_source: dict[str, deque[MediaFile]] = defaultdict(deque)
-    for file in sorted(files, key=lambda item: item.created_at):
-        grouped_by_source[file.source].append(file)
+    if not files:
+        return []
 
+    sorted_files = sorted(files, key=lambda item: item.created_at)
     groups: list[MediaGroup] = []
     window_seconds = window.total_seconds()
 
-    while True:
-        next_candidates = [queue[0] for queue in grouped_by_source.values() if queue]
-        if not next_candidates:
-            break
+    current_group: list[MediaFile] = [sorted_files[0]]
+    current_anchor = sorted_files[0].created_at
 
-        anchor = min(next_candidates, key=lambda item: item.created_at)
-        anchor_time = anchor.created_at
-        group_files: list[MediaFile] = []
-
-        for queue in grouped_by_source.values():
-            if not queue:
-                continue
-            candidate = queue[0]
-            delta = abs((candidate.created_at - anchor_time).total_seconds())
-            if delta <= window_seconds:
-                group_files.append(queue.popleft())
-
-        if not group_files:
-            queue = grouped_by_source[anchor.source]
-            if queue:
-                group_files.append(queue.popleft())
+    for media_file in sorted_files[1:]:
+        delta = (media_file.created_at - current_anchor).total_seconds()
+        if delta <= window_seconds:
+            current_group.append(media_file)
+            continue
 
         groups.append(
             MediaGroup(
-                start_time=min(file.created_at for file in group_files),
-                files=sorted(group_files, key=lambda item: item.created_at),
+                start_time=current_anchor,
+                files=sorted(current_group, key=lambda item: item.created_at),
             )
         )
+        current_group = [media_file]
+        current_anchor = media_file.created_at
 
-    return sorted(groups, key=lambda group: group.start_time)
+    groups.append(
+        MediaGroup(
+            start_time=current_anchor,
+            files=sorted(current_group, key=lambda item: item.created_at),
+        )
+    )
+    return groups
 
 
 def find_existing_episode_numbers(podcast_root: Path) -> list[int]:

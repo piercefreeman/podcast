@@ -23,6 +23,7 @@ from .resource import (
     EpisodeGroup,
     MediaGroup,
     SourceOption,
+    align_groups_by_media_duration,
     convert_mov_files,
     discover_sources,
     find_existing_episode_numbers,
@@ -171,6 +172,23 @@ def run(
     if not groups:
         console.print("No aligned groups were generated.")
         return 0
+
+    duration_matches = align_groups_by_media_duration(
+        groups, selected_sources, scanned_files, day_start, day_end
+    )
+    if not groups:
+        console.print("No aligned groups were generated after duration matching.")
+        return 0
+
+    if duration_matches:
+        details = ", ".join(
+            f"{source}={count}" for source, count in sorted(duration_matches.items())
+        )
+        console.print(
+            "Aligned groups by media length; included files outside day filter for: "
+            f"{details}",
+            style="yellow",
+        )
 
     print_group_table(groups)
 
