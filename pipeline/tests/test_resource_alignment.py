@@ -126,12 +126,16 @@ class ResourceAlignmentTests(unittest.TestCase):
             for file_path in iter_files_map.get(root, []):
                 yield file_path
 
-        with patch("pipeline.resource.iter_files", side_effect=fake_iter_files), patch(
-            "pipeline.resource.safe_created_at",
-            side_effect=lambda path: created_times.get(path),
-        ), patch(
-            "pipeline.resource.safe_media_duration_seconds",
-            side_effect=lambda path: durations.get(path),
+        with (
+            patch("pipeline.resource.iter_files", side_effect=fake_iter_files),
+            patch(
+                "pipeline.resource.safe_created_at",
+                side_effect=lambda path: created_times.get(path),
+            ),
+            patch(
+                "pipeline.resource.safe_media_duration_seconds",
+                side_effect=lambda path: durations.get(path),
+            ),
         ):
             outside_day = align_groups_by_media_duration(
                 groups, selected_sources, day_matched_files, day_start, day_end
@@ -139,32 +143,58 @@ class ResourceAlignmentTests(unittest.TestCase):
 
         self.assertEqual(outside_day, {"EOS_DIGITAL": 2, "NINJAV": 3})
 
-        self.assertEqual([group.start_time for group in groups], [dt_1217, dt_1228, dt_1455, dt_1632])
+        self.assertEqual(
+            [group.start_time for group in groups], [dt_1217, dt_1228, dt_1455, dt_1632]
+        )
 
         groups_by_start = {group.start_time: group for group in groups}
         self.assertEqual(
-            [file.path.name for file in groups_by_start[dt_1228].files if file.source == "EOS_DIGITAL"],
+            [
+                file.path.name
+                for file in groups_by_start[dt_1228].files
+                if file.source == "EOS_DIGITAL"
+            ],
             ["DSCF0008.MOV"],
         )
         self.assertEqual(
-            [file.path.name for file in groups_by_start[dt_1455].files if file.source == "EOS_DIGITAL"],
+            [
+                file.path.name
+                for file in groups_by_start[dt_1455].files
+                if file.source == "EOS_DIGITAL"
+            ],
             ["DSCF0009.MOV"],
         )
         self.assertEqual(
-            [file.path.name for file in groups_by_start[dt_1632].files if file.source == "EOS_DIGITAL"],
+            [
+                file.path.name
+                for file in groups_by_start[dt_1632].files
+                if file.source == "EOS_DIGITAL"
+            ],
             ["DSCF0010.MOV"],
         )
 
         self.assertEqual(
-            [file.path.name for file in groups_by_start[dt_1228].files if file.source == "NINJAV"],
+            [
+                file.path.name
+                for file in groups_by_start[dt_1228].files
+                if file.source == "NINJAV"
+            ],
             ["NINJAV_S001_S001_T832.MOV"],
         )
         self.assertEqual(
-            [file.path.name for file in groups_by_start[dt_1455].files if file.source == "NINJAV"],
+            [
+                file.path.name
+                for file in groups_by_start[dt_1455].files
+                if file.source == "NINJAV"
+            ],
             ["NINJAV_S001_S001_T833.MOV"],
         )
         self.assertEqual(
-            [file.path.name for file in groups_by_start[dt_1632].files if file.source == "NINJAV"],
+            [
+                file.path.name
+                for file in groups_by_start[dt_1632].files
+                if file.source == "NINJAV"
+            ],
             ["NINJAV_S001_S001_T834.MOV"],
         )
 
@@ -173,10 +203,18 @@ class ResourceAlignmentTests(unittest.TestCase):
     ) -> None:
         anchor = datetime(2026, 2, 16, 12, 28, 0)
         files = [
-            MediaFile(source="AudioHijack", path=Path("/audio/stem_1.wav"), created_at=anchor),
-            MediaFile(source="AudioHijack", path=Path("/audio/stem_2.wav"), created_at=anchor),
-            MediaFile(source="AudioHijack", path=Path("/audio/stem_3.wav"), created_at=anchor),
-            MediaFile(source="AudioHijack", path=Path("/audio/stem_4.wav"), created_at=anchor),
+            MediaFile(
+                source="AudioHijack", path=Path("/audio/stem_1.wav"), created_at=anchor
+            ),
+            MediaFile(
+                source="AudioHijack", path=Path("/audio/stem_2.wav"), created_at=anchor
+            ),
+            MediaFile(
+                source="AudioHijack", path=Path("/audio/stem_3.wav"), created_at=anchor
+            ),
+            MediaFile(
+                source="AudioHijack", path=Path("/audio/stem_4.wav"), created_at=anchor
+            ),
             MediaFile(
                 source="NINJAV",
                 path=Path("/ninjav/NINJAV_S001_S001_T832.MOV"),

@@ -208,33 +208,64 @@ def run(
             console.print("Aborted.")
             return 0
 
-    try:
-        episode_groups: list[EpisodeGroup] = move_groups_to_episodes(
-            groups,
-            podcast_root,
-            dry_run=dry_run,
-        )
-    except RuntimeError as exc:
-        console.print(str(exc), style="bold red", markup=False)
-        return 1
-
     if dry_run:
+        try:
+            move_groups_to_episodes(
+                groups,
+                podcast_root,
+                dry_run=True,
+            )
+        except RuntimeError as exc:
+            console.print(str(exc), style="bold red", markup=False)
+            return 1
         console.print("Dry run complete. No files were moved or converted.")
         return 0
 
-    convert_code = convert_mov_files(episode_groups, dry_run=False)
-    if convert_code != 0:
-        return convert_code
+    total_groups = len(groups)
+    for group_index, group in enumerate(groups, start=1):
+        console.print(
+            f"Processing group {group_index}/{total_groups} ({group.start_time:%Y-%m-%d %H:%M:%S})"
+        )
+
+        try:
+            moved_groups: list[EpisodeGroup] = move_groups_to_episodes(
+                [group],
+                podcast_root,
+                dry_run=False,
+            )
+        except RuntimeError as exc:
+            console.print(str(exc), style="bold red", markup=False)
+            return 1
+
+        if not moved_groups:
+            console.print(
+                "No episode group was produced for this aligned group.",
+                style="bold red",
+            )
+            return 1
+
+        episode_group = moved_groups[0]
+
+        convert_code = convert_mov_files([episode_group], dry_run=False)
+        if convert_code != 0:
+            return convert_code
+
+        if skip_frameio_upload:
+            continue
+
+        upload_code = upload_episode_files_to_frameio(
+            [episode_group],
+            token=frameio_settings.token.get_secret_value(),
+            destination_id=frameio_settings.destination_id,
+        )
+        if upload_code != 0:
+            return upload_code
 
     if skip_frameio_upload:
         console.print("Skipping Frame.io upload (--skip-frameio-upload).")
         return 0
 
-    return upload_episode_files_to_frameio(
-        episode_groups,
-        token=frameio_settings.token.get_secret_value(),
-        destination_id=frameio_settings.destination_id,
-    )
+    return 0
 
 
 @click.command(
