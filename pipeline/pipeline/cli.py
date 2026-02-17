@@ -25,6 +25,7 @@ from .resource import (
     SourceOption,
     align_groups_by_media_duration,
     convert_mov_files,
+    delete_original_media_files,
     discover_sources,
     find_existing_episode_numbers,
     group_files_by_start_time,
@@ -201,7 +202,7 @@ def run(
 
     if not yes and not dry_run:
         proceed = Confirm.ask(
-            "Continue with moving files and converting .mov files?",
+            "Continue with copying files and converting .mov files?",
             default=True,
         )
         if not proceed:
@@ -218,9 +219,10 @@ def run(
         except RuntimeError as exc:
             console.print(str(exc), style="bold red", markup=False)
             return 1
-        console.print("Dry run complete. No files were moved or converted.")
+        console.print("Dry run complete. No files were copied or converted.")
         return 0
 
+    originals_for_cleanup: list[Path] = []
     total_groups = len(groups)
     for group_index, group in enumerate(groups, start=1):
         console.print(
@@ -263,14 +265,41 @@ def run(
 
     if skip_frameio_upload:
         console.print("Skipping Frame.io upload (--skip-frameio-upload).")
+
+    originals_for_cleanup.extend(file.path for group in groups for file in group.files)
+    original_candidates = sorted(set(originals_for_cleanup), key=lambda item: str(item))
+    if not original_candidates:
         return 0
 
+    if not sys.stdin.isatty():
+        console.print(
+            "Preserving original source files because final deletion requires interactive confirmation.",
+            style="yellow",
+        )
+        return 0
+
+    should_delete_originals = Confirm.ask(
+        f"All aligned episodes finished. Delete {len(original_candidates)} original source file(s) now?",
+        default=False,
+    )
+    if not should_delete_originals:
+        console.print("Kept original source files.", style="yellow")
+        return 0
+
+    deleted_count, delete_failures = delete_original_media_files(original_candidates)
+    if delete_failures:
+        console.print(f"{len(delete_failures)} delete(s) failed.", style="bold red")
+        for failure in delete_failures:
+            console.print(f"  - {failure}", markup=False)
+        return 1
+
+    console.print(f"Deleted {deleted_count} original source file(s).", style="green")
     return 0
 
 
 @click.command(
     context_settings={"help_option_names": ["-h", "--help"]},
-    help="Group today's media files by start time and move them into episode folders.",
+    help="Group today's media files by start time and copy them into episode folders.",
 )
 @click.option(
     "--start-window",

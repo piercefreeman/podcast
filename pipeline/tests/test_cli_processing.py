@@ -22,16 +22,21 @@ class _FakeFrameioSettings:
 class CliProcessingOrderTests(unittest.TestCase):
     def test_run_processes_each_group_in_sequence(self) -> None:
         source = SourceOption(name="AudioHijack", path=Path("."), selected=True)
-        day_file = MediaFile(
+        day_file_one = MediaFile(
             source="AudioHijack",
-            path=Path("/audio/input.wav"),
+            path=Path("/audio/input_1.wav"),
             created_at=datetime(2026, 2, 16, 12, 17, 33),
         )
+        day_file_two = MediaFile(
+            source="AudioHijack",
+            path=Path("/audio/input_2.wav"),
+            created_at=datetime(2026, 2, 16, 12, 28, 0),
+        )
         group_one = MediaGroup(
-            start_time=datetime(2026, 2, 16, 12, 17, 33), files=[day_file]
+            start_time=datetime(2026, 2, 16, 12, 17, 33), files=[day_file_one]
         )
         group_two = MediaGroup(
-            start_time=datetime(2026, 2, 16, 12, 28, 0), files=[day_file]
+            start_time=datetime(2026, 2, 16, 12, 28, 0), files=[day_file_two]
         )
         groups = [group_one, group_two]
 
@@ -90,17 +95,26 @@ class CliProcessingOrderTests(unittest.TestCase):
             events.append(("upload", episode_groups[0].episode_dir.name))
             return 0
 
+        def delete_side_effect(paths: list[Path]) -> tuple[int, list[str]]:
+            events.append(("delete", str(len(paths))))
+            return len(paths), []
+
         with (
             patch(
                 "pipeline.cli.load_frameio_settings",
                 return_value=_FakeFrameioSettings(),
             ),
             patch("pipeline.cli.discover_sources", return_value=[source]),
-            patch("pipeline.cli.scan_sources_for_today_files", return_value=[day_file]),
+            patch(
+                "pipeline.cli.scan_sources_for_today_files",
+                return_value=[day_file_one, day_file_two],
+            ),
             patch("pipeline.cli.group_files_by_start_time", return_value=groups),
             patch("pipeline.cli.align_groups_by_media_duration", return_value={}),
             patch("pipeline.cli.print_group_table", return_value=None),
             patch("pipeline.cli.find_existing_episode_numbers", return_value=[45]),
+            patch("pipeline.cli.sys.stdin.isatty", return_value=True),
+            patch("pipeline.cli.Confirm.ask", return_value=True) as confirm_mock,
             patch(
                 "pipeline.cli.move_groups_to_episodes", side_effect=move_side_effect
             ) as move_mock,
@@ -111,6 +125,10 @@ class CliProcessingOrderTests(unittest.TestCase):
                 "pipeline.cli.upload_episode_files_to_frameio",
                 side_effect=upload_side_effect,
             ) as upload_mock,
+            patch(
+                "pipeline.cli.delete_original_media_files",
+                side_effect=delete_side_effect,
+            ) as delete_mock,
         ):
             exit_code = run(
                 start_window=timedelta(minutes=5),
@@ -126,6 +144,12 @@ class CliProcessingOrderTests(unittest.TestCase):
         self.assertEqual(move_mock.call_count, 2)
         self.assertEqual(convert_mock.call_count, 2)
         self.assertEqual(upload_mock.call_count, 2)
+        confirm_mock.assert_called_once()
+        delete_mock.assert_called_once()
+        delete_paths = delete_mock.call_args.args[0]
+        self.assertEqual(
+            set(delete_paths), {Path("/audio/input_1.wav"), Path("/audio/input_2.wav")}
+        )
         self.assertEqual(
             events,
             [
@@ -135,6 +159,7 @@ class CliProcessingOrderTests(unittest.TestCase):
                 ("move", "12:28:00"),
                 ("convert", "episode_47"),
                 ("upload", "episode_47"),
+                ("delete", "2"),
             ],
         )
 
@@ -161,11 +186,15 @@ class CliProcessingOrderTests(unittest.TestCase):
             patch("pipeline.cli.align_groups_by_media_duration", return_value={}),
             patch("pipeline.cli.print_group_table", return_value=None),
             patch("pipeline.cli.find_existing_episode_numbers", return_value=[45]),
+            patch("pipeline.cli.Confirm.ask", return_value=True) as confirm_mock,
             patch("pipeline.cli.move_groups_to_episodes", return_value=[]) as move_mock,
             patch("pipeline.cli.convert_mov_files", return_value=0) as convert_mock,
             patch(
                 "pipeline.cli.upload_episode_files_to_frameio", return_value=0
             ) as upload_mock,
+            patch(
+                "pipeline.cli.delete_original_media_files", return_value=(0, [])
+            ) as delete_mock,
         ):
             exit_code = run(
                 start_window=timedelta(minutes=5),
@@ -181,6 +210,8 @@ class CliProcessingOrderTests(unittest.TestCase):
         move_mock.assert_called_once_with(groups, Path("/podcast"), dry_run=True)
         convert_mock.assert_not_called()
         upload_mock.assert_not_called()
+        confirm_mock.assert_not_called()
+        delete_mock.assert_not_called()
 
 
 if __name__ == "__main__":

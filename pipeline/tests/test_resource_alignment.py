@@ -10,14 +10,44 @@ from rich.progress import Progress
 
 from pipeline.resource import (
     MediaFile,
+    MediaGroup,
     SourceOption,
     align_groups_by_media_duration,
     group_files_by_start_time,
+    move_groups_to_episodes,
     scan_source_for_today_files,
 )
 
 
 class ResourceAlignmentTests(unittest.TestCase):
+    def test_move_groups_to_episodes_copies_instead_of_removing_source(self) -> None:
+        with TemporaryDirectory() as source_dir, TemporaryDirectory() as podcast_dir:
+            source_path = Path(source_dir) / "source.mov"
+            source_path.write_bytes(b"sample")
+
+            group = [
+                MediaGroup(
+                    start_time=datetime(2026, 2, 16, 12, 17, 33),
+                    files=[
+                        MediaFile(
+                            source="NINJAV",
+                            path=source_path,
+                            created_at=datetime(2026, 2, 16, 12, 17, 33),
+                        )
+                    ],
+                )
+            ]
+
+            episode_groups = move_groups_to_episodes(
+                group, Path(podcast_dir), dry_run=False
+            )
+
+            self.assertTrue(source_path.exists())
+            self.assertEqual(len(episode_groups), 1)
+            copied_path = episode_groups[0].files[0].path
+            self.assertTrue(copied_path.exists())
+            self.assertEqual(copied_path.read_bytes(), b"sample")
+
     def test_scan_source_for_today_files_ignores_non_media_files(self) -> None:
         with TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

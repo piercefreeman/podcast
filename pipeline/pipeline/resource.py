@@ -528,8 +528,9 @@ def allocate_episode_directories(podcast_root: Path, group_count: int) -> list[P
     return episode_directories
 
 
-def move_file_to_destination(source_path: Path, destination: Path) -> Path:
-    return Path(shutil.move(str(source_path), str(destination)))
+def copy_file_to_destination(source_path: Path, destination: Path) -> Path:
+    shutil.copy2(str(source_path), str(destination))
+    return destination
 
 
 def plan_group_destinations(files: list[MediaFile], episode_dir: Path) -> list[Path]:
@@ -579,8 +580,8 @@ def move_groups_to_episodes(
         TimeElapsedColumn(),
         console=console,
     ) as progress:
-        move_task = progress.add_task("Moving files", total=total_files)
-        move_jobs: list[tuple[int, MediaFile, Path]] = []
+        copy_task = progress.add_task("Copying files", total=total_files)
+        copy_jobs: list[tuple[int, MediaFile, Path]] = []
         for group_index, (group, episode_dir) in enumerate(
             zip(groups, episode_directories)
         ):
@@ -589,10 +590,10 @@ def move_groups_to_episodes(
 
             destinations = plan_group_destinations(group.files, episode_dir)
             for file, destination in zip(group.files, destinations):
-                move_jobs.append((group_index, file, destination))
+                copy_jobs.append((group_index, file, destination))
 
         if dry_run:
-            for group_index, file, destination in move_jobs:
+            for group_index, file, destination in copy_jobs:
                 episode_groups[group_index].files.append(
                     MediaFile(
                         source=file.source,
@@ -600,16 +601,16 @@ def move_groups_to_episodes(
                         created_at=file.created_at,
                     )
                 )
-                progress.advance(move_task)
+                progress.advance(copy_task)
             return episode_groups
 
         max_workers = min(max(total_files, 1), 8)
         future_map = {}
-        move_failures: list[str] = []
+        copy_failures: list[str] = []
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            for group_index, file, destination in move_jobs:
+            for group_index, file, destination in copy_jobs:
                 future = executor.submit(
-                    move_file_to_destination, file.path, destination
+                    copy_file_to_destination, file.path, destination
                 )
                 future_map[future] = (group_index, file)
 
@@ -625,16 +626,47 @@ def move_groups_to_episodes(
                         )
                     )
                 except Exception as exc:
-                    move_failures.append(f"{file.path}: {exc}")
-                progress.advance(move_task)
+                    copy_failures.append(f"{file.path}: {exc}")
+                progress.advance(copy_task)
 
-        if move_failures:
-            raise RuntimeError("Failed moves:\n" + "\n".join(move_failures))
+        if copy_failures:
+            raise RuntimeError("Failed copies:\n" + "\n".join(copy_failures))
 
         for episode_group in episode_groups:
             episode_group.files.sort(key=lambda media: media.created_at)
 
     return episode_groups
+
+
+def delete_original_media_files(paths: list[Path]) -> tuple[int, list[str]]:
+    unique_paths = sorted(set(paths), key=lambda item: str(item))
+    if not unique_paths:
+        return 0, []
+
+    failures: list[str] = []
+    deleted_count = 0
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[bold red]{task.description}"),
+        BarColumn(),
+        TextColumn("{task.completed:,.0f}/{task.total:,.0f}"),
+        TimeElapsedColumn(),
+        console=console,
+    ) as progress:
+        delete_task = progress.add_task(
+            "Deleting original source files", total=len(unique_paths)
+        )
+        for path in unique_paths:
+            try:
+                path.unlink()
+                deleted_count += 1
+            except FileNotFoundError:
+                pass
+            except Exception as exc:
+                failures.append(f"{path}: {exc}")
+            progress.advance(delete_task)
+
+    return deleted_count, failures
 
 
 def ffmpeg_command(input_path: Path, output_path: Path) -> list[str]:
