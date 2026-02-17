@@ -18,4 +18,8 @@ The settings model uses `vaultdantic` with 1Password by default:
 - Vault: `Side-Projects`
 - Item: `Pretrained-Pipeline`
 
-Frame.io settings are validated at CLI startup (including `--dry-run`) before scanning/moving begins.
+Destination is configured with:
+
+- `FRAMEIO_DESTINATION_NAME` (project name; resolved at startup)
+
+Frame.io settings are validated at CLI startup (including `--dry-run`) before scanning/copying begins.

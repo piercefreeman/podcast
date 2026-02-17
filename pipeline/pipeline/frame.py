@@ -29,6 +29,12 @@ class UploadJob:
     destination_folder_id: str
 
 
+@dataclass(frozen=True)
+class FrameioUploadContext:
+    client: Any
+    destination_root_id: str
+
+
 def collect_upload_candidates(
     episode_groups: list[EpisodeGroup],
 ) -> dict[Path, list[Path]]:
@@ -48,16 +54,144 @@ def collect_upload_candidates(
     return candidates
 
 
-def resolve_frameio_destination_folder_id(client: Any, destination_id: str) -> str:
+def _as_list(results: Any) -> list[dict[str, Any]]:
+    if isinstance(results, list):
+        return results
+    return list(results)
+
+
+def _collect_projects_for_name_resolution(client: Any) -> list[tuple[str, str, str]]:
+    projects: list[tuple[str, str, str]] = []
+    details: list[str] = []
+    seen_project_ids: set[str] = set()
+
+    def add_project(project_source: str, project_name: str, project_id: str) -> None:
+        if not project_name or not project_id:
+            return
+        if project_id in seen_project_ids:
+            return
+        seen_project_ids.add(project_id)
+        projects.append((project_source, project_name, project_id))
+
     try:
-        destination_asset = client.assets.get(destination_id)
-        destination_type = destination_asset.get("type")
-        if destination_type == "project":
-            return destination_asset["root_asset_id"]
-        return destination_asset["id"]
-    except Exception:
-        project = client.projects.get(destination_id)
-        return project["root_asset_id"]
+        before = len(projects)
+        teams = _as_list(client.teams.list_all())
+        for team in teams:
+            team_id = team.get("id")
+            if not team_id:
+                continue
+            team_name = str(team.get("name", "unknown-team"))
+            team_projects = _as_list(client.teams.list_projects(team_id))
+            for project in team_projects:
+                add_project(
+                    project_source=team_name,
+                    project_name=str(project.get("name", "")),
+                    project_id=str(project.get("id", "")),
+                )
+        if len(projects) == before:
+            details.append("/teams returned 0 projects")
+    except Exception as exc:
+        details.append(f"/teams lookup failed: {exc}")
+
+    try:
+        before = len(projects)
+        me = client.users.get_me()
+        account_id = me.get("account_id") if isinstance(me, dict) else None
+        if account_id:
+            account_teams = _as_list(client.teams.list(account_id))
+            for team in account_teams:
+                team_id = team.get("id")
+                if not team_id:
+                    continue
+                team_name = str(team.get("name", "unknown-team"))
+                team_projects = _as_list(client.teams.list_projects(team_id))
+                for project in team_projects:
+                    add_project(
+                        project_source=team_name,
+                        project_name=str(project.get("name", "")),
+                        project_id=str(project.get("id", "")),
+                    )
+            if len(projects) == before:
+                details.append("/accounts/{account_id}/teams returned 0 projects")
+        else:
+            details.append("/me lookup returned no account_id")
+    except Exception as exc:
+        details.append(f"/accounts/{{account_id}}/teams lookup failed: {exc}")
+
+    if projects:
+        return projects
+
+    try:
+        before = len(projects)
+        listed_projects = _as_list(client._api_call("get", "/projects"))
+        for project in listed_projects:
+            add_project(
+                project_source="projects",
+                project_name=str(project.get("name", "")),
+                project_id=str(project.get("id", "")),
+            )
+        if len(projects) == before:
+            details.append("/projects returned 0 projects")
+    except Exception as exc:
+        details.append(f"/projects lookup failed: {exc}")
+
+    try:
+        before = len(projects)
+        shared_projects = _as_list(client._api_call("get", "/projects/shared"))
+        for project in shared_projects:
+            add_project(
+                project_source="projects/shared",
+                project_name=str(project.get("name", "")),
+                project_id=str(project.get("id", "")),
+            )
+        if len(projects) == before:
+            details.append("/projects/shared returned 0 projects")
+    except Exception as exc:
+        details.append(f"/projects/shared lookup failed: {exc}")
+
+    if projects:
+        return projects
+
+    summary = " | ".join(details) if details else "no project listing endpoints returned data"
+    raise RuntimeError(
+        "Unable to list Frame.io projects for name resolution "
+        f"({summary}). Ensure FRAMEIO_TOKEN can read accessible projects."
+    )
+
+
+def resolve_frameio_destination_folder_id(
+    client: Any,
+    destination_name: str,
+) -> str:
+    projects = _collect_projects_for_name_resolution(client)
+    exact_matches: list[tuple[str, str, str]] = []
+    casefold_matches: list[tuple[str, str, str]] = []
+    for project_source, project_name, project_id in projects:
+        entry = (project_source, project_name, project_id)
+        if project_name == destination_name:
+            exact_matches.append(entry)
+        if project_name.lower() == destination_name.lower():
+            casefold_matches.append(entry)
+
+    matches = exact_matches if exact_matches else casefold_matches
+    if not matches:
+        raise RuntimeError(
+            f"Failed to find Frame.io project named '{destination_name}' for this token."
+        )
+    if len(matches) > 1:
+        options = ", ".join(
+            f"{team}/{project} ({project_id})"
+            for team, project, project_id in matches[:5]
+        )
+        raise RuntimeError(
+            "Frame.io destination name is ambiguous. "
+            f"Multiple projects matched '{destination_name}': {options}. "
+            "Use a unique project name."
+        )
+
+    _, _, project_id = matches[0]
+    project = client.projects.get(project_id)
+    return project["root_asset_id"]
 
 
 def iter_asset_children(client: Any, parent_asset_id: str) -> list[dict[str, Any]]:
@@ -102,10 +236,45 @@ def upload_file_to_frameio(
     return remote_asset
 
 
+def build_frameio_upload_context(
+    token: str,
+    destination_name: str,
+) -> FrameioUploadContext:
+    try:
+        from frameioclient import FrameioClient
+    except ImportError as exc:
+        raise RuntimeError(f"Failed to import frameioclient: {exc}") from exc
+
+    try:
+        client = FrameioClient(token)
+    except Exception as exc:
+        raise RuntimeError(
+            "Failed to initialize Frame.io client. "
+            "Ensure urllib3<2 is installed and FRAMEIO_TOKEN is valid. "
+            f"Details: {exc}"
+        ) from exc
+
+    try:
+        destination_root_id = resolve_frameio_destination_folder_id(
+            client,
+            destination_name=destination_name,
+        )
+    except Exception as exc:
+        raise RuntimeError(
+            f"Failed to resolve Frame.io destination name '{destination_name}': {exc}"
+        ) from exc
+
+    return FrameioUploadContext(
+        client=client,
+        destination_root_id=destination_root_id,
+    )
+
+
 def upload_episode_files_to_frameio(
     episode_groups: list[EpisodeGroup],
     token: str,
-    destination_id: str,
+    destination_name: str,
+    context: FrameioUploadContext | None = None,
 ) -> int:
     upload_candidates = collect_upload_candidates(episode_groups)
     if not upload_candidates:
@@ -113,35 +282,20 @@ def upload_episode_files_to_frameio(
         return 0
 
     try:
-        from frameioclient import FrameioClient
-    except ImportError as exc:
-        console.print(
-            f"Failed to import frameioclient: {exc}", style="bold red", markup=False
+        upload_context = context or build_frameio_upload_context(
+            token,
+            destination_name=destination_name,
         )
-        return 1
-
-    try:
-        client = FrameioClient(token)
-    except Exception as exc:
+    except RuntimeError as exc:
         console.print(
-            "Failed to initialize Frame.io client. "
-            "Ensure urllib3<2 is installed and FRAMEIO_TOKEN is valid.",
-            style="bold red",
-        )
-        console.print(str(exc), style="red", markup=False)
-        return 1
-
-    try:
-        destination_root_id = resolve_frameio_destination_folder_id(
-            client, destination_id
-        )
-    except Exception as exc:
-        console.print(
-            f"Failed to resolve FRAMEIO_DESTINATION_ID '{destination_id}': {exc}",
+            str(exc),
             style="bold red",
             markup=False,
         )
         return 1
+
+    client = upload_context.client
+    destination_root_id = upload_context.destination_root_id
 
     upload_jobs: list[UploadJob] = []
     for episode_dir in sorted(upload_candidates, key=lambda item: item.name.lower()):

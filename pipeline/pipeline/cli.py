@@ -18,12 +18,14 @@ from .config import (
     load_frameio_settings,
     parse_duration,
 )
-from .frame import upload_episode_files_to_frameio
+from .frame import build_frameio_upload_context, upload_episode_files_to_frameio
 from .resource import (
     EpisodeGroup,
     MediaGroup,
     SourceOption,
+    align_groups_by_media_duration,
     convert_mov_files,
+    delete_original_media_files,
     discover_sources,
     find_existing_episode_numbers,
     group_files_by_start_time,
@@ -142,6 +144,18 @@ def run(
         style="green",
     )
 
+    frameio_context = None
+    if not skip_frameio_upload:
+        try:
+            frameio_context = build_frameio_upload_context(
+                token=frameio_settings.token.get_secret_value(),
+                destination_name=frameio_settings.destination_name,
+            )
+        except RuntimeError as exc:
+            console.print(str(exc), style="bold red", markup=False)
+            return 1
+        console.print("Frame.io destination preflight check passed.", style="green")
+
     source_options = discover_sources(audiohijack_path)
     if all_volumes:
         for option in source_options:
@@ -172,6 +186,23 @@ def run(
         console.print("No aligned groups were generated.")
         return 0
 
+    duration_matches = align_groups_by_media_duration(
+        groups, selected_sources, scanned_files, day_start, day_end
+    )
+    if not groups:
+        console.print("No aligned groups were generated after duration matching.")
+        return 0
+
+    if duration_matches:
+        details = ", ".join(
+            f"{source}={count}" for source, count in sorted(duration_matches.items())
+        )
+        console.print(
+            "Aligned groups by media length; included files outside day filter for: "
+            f"{details}",
+            style="yellow",
+        )
+
     print_group_table(groups)
 
     existing_episodes = find_existing_episode_numbers(podcast_root)
@@ -183,45 +214,105 @@ def run(
 
     if not yes and not dry_run:
         proceed = Confirm.ask(
-            "Continue with moving files and converting .mov files?",
+            "Continue with copying files and converting .mov files?",
             default=True,
         )
         if not proceed:
             console.print("Aborted.")
             return 0
 
-    try:
-        episode_groups: list[EpisodeGroup] = move_groups_to_episodes(
-            groups,
-            podcast_root,
-            dry_run=dry_run,
-        )
-    except RuntimeError as exc:
-        console.print(str(exc), style="bold red", markup=False)
-        return 1
-
     if dry_run:
-        console.print("Dry run complete. No files were moved or converted.")
+        try:
+            move_groups_to_episodes(
+                groups,
+                podcast_root,
+                dry_run=True,
+            )
+        except RuntimeError as exc:
+            console.print(str(exc), style="bold red", markup=False)
+            return 1
+        console.print("Dry run complete. No files were copied or converted.")
         return 0
 
-    convert_code = convert_mov_files(episode_groups, dry_run=False)
-    if convert_code != 0:
-        return convert_code
+    originals_for_cleanup: list[Path] = []
+    total_groups = len(groups)
+    for group_index, group in enumerate(groups, start=1):
+        console.print(
+            f"Processing group {group_index}/{total_groups} ({group.start_time:%Y-%m-%d %H:%M:%S})"
+        )
+
+        try:
+            moved_groups: list[EpisodeGroup] = move_groups_to_episodes(
+                [group],
+                podcast_root,
+                dry_run=False,
+            )
+        except RuntimeError as exc:
+            console.print(str(exc), style="bold red", markup=False)
+            return 1
+
+        if not moved_groups:
+            console.print(
+                "No episode group was produced for this aligned group.",
+                style="bold red",
+            )
+            return 1
+
+        episode_group = moved_groups[0]
+
+        convert_code = convert_mov_files([episode_group], dry_run=False)
+        if convert_code != 0:
+            return convert_code
+
+        if skip_frameio_upload:
+            continue
+
+        upload_code = upload_episode_files_to_frameio(
+            [episode_group],
+            token=frameio_settings.token.get_secret_value(),
+            destination_name=frameio_settings.destination_name,
+            context=frameio_context,
+        )
+        if upload_code != 0:
+            return upload_code
 
     if skip_frameio_upload:
         console.print("Skipping Frame.io upload (--skip-frameio-upload).")
+
+    originals_for_cleanup.extend(file.path for group in groups for file in group.files)
+    original_candidates = sorted(set(originals_for_cleanup), key=lambda item: str(item))
+    if not original_candidates:
         return 0
 
-    return upload_episode_files_to_frameio(
-        episode_groups,
-        token=frameio_settings.token.get_secret_value(),
-        destination_id=frameio_settings.destination_id,
+    if not sys.stdin.isatty():
+        console.print(
+            "Preserving original source files because final deletion requires interactive confirmation.",
+            style="yellow",
+        )
+        return 0
+
+    should_delete_originals = Confirm.ask(
+        f"All aligned episodes finished. Delete {len(original_candidates)} original source file(s) now?",
+        default=False,
     )
+    if not should_delete_originals:
+        console.print("Kept original source files.", style="yellow")
+        return 0
+
+    deleted_count, delete_failures = delete_original_media_files(original_candidates)
+    if delete_failures:
+        console.print(f"{len(delete_failures)} delete(s) failed.", style="bold red")
+        for failure in delete_failures:
+            console.print(f"  - {failure}", markup=False)
+        return 1
+
+    console.print(f"Deleted {deleted_count} original source file(s).", style="green")
+    return 0
 
 
 @click.command(
     context_settings={"help_option_names": ["-h", "--help"]},
-    help="Group today's media files by start time and move them into episode folders.",
+    help="Group today's media files by start time and copy them into episode folders.",
 )
 @click.option(
     "--start-window",
@@ -257,7 +348,7 @@ def run(
 @click.option(
     "--dry-run",
     is_flag=True,
-    help="Show planned actions but do not move files, run ffmpeg, or upload to Frame.io.",
+    help="Show planned actions but do not copy files, run ffmpeg, or upload to Frame.io.",
 )
 @click.option(
     "--skip-frameio-upload",
