@@ -1,0 +1,33 @@
+[project]
+name = "podcast-summary"
+version = "0.1.0"
+description = "Local Whisper transcription and an Astra producer brief for a video."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "click>=8.1",
+    "mlx-whisper>=0.4.3",
+    "pydantic-ai-slim[openai]>=1.0",
+    "python-dotenv>=1.0",
+    "requests>=2.32",
+    "yt-dlp>=2026.1.29",
+]
+
+[project.scripts]
+episode-summary = "podcast.cli:main"
+
+[dependency-groups]
+dev = ["pytest>=8", "ruff>=0.12"]
+
+[build-system]
+requires = ["hatchling>=1.24"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["podcast"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]

@@ -8,10 +8,15 @@ lint: lint-python lint-swift
 lint-verify: lint-python-verify lint-swift-verify
 
 lint-python:
+	$(UV) run ruff format podcast tests
+	$(UV) run ruff check podcast tests --fix
 	cd pipeline && $(UV) tool run --from ruff ruff format .
 	cd pipeline && $(UV) tool run --from ruff ruff check . --fix
 
 lint-python-verify:
+	$(UV) run ruff format --check podcast tests
+	$(UV) run ruff check podcast tests
+	$(UV) run pytest
 	cd pipeline && $(UV) tool run --from ruff ruff format --check .
 	cd pipeline && $(UV) tool run --from ruff ruff check .
 
