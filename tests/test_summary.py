@@ -7,6 +7,7 @@ from pydantic_ai.models.function import FunctionModel
 
 from podcast.summary import (
     EpisodeSummary,
+    SpeakerName,
     agent,
     render_summary,
     summarize,
@@ -38,6 +39,8 @@ def transcript():
 def brief():
     return EpisodeSummary(
         title="Where smaller models stop saving money",
+        background="An AI model is software trained on examples. Inference means using it to produce an answer.",
+        speakers=[],
         synopsis="The hosts compare cheaper inference with the cost of failures.",
         takeaways=["Evaluate on difficult tasks before switching models."],
         topics=[
@@ -56,7 +59,6 @@ def brief():
                 summary="A complete example with a clear reversal.",
             )
         ],
-        producer_notes=[dict(segment=0, note="Verify the claimed cost reduction.")],
     )
 
 
@@ -69,8 +71,16 @@ def test_agent_round_trip_and_timestamps(transcript, brief):
         result = summarize(transcript)
     assert result == brief
     rendered = render_summary(result, transcript)
+    assert (
+        rendered.index("## Background")
+        < rendered.index(brief.background)
+        < rendered.index("## What we talked about")
+        < rendered.index(brief.synopsis)
+        < rendered.index("## Key takeaways")
+    )
     assert "00:00:00–00:01:05" in rendered
-    assert "**00:00:00**" in rendered
+    assert "Producer notes" not in rendered
+    assert "producer_notes" not in result.model_dump()
     assert timestamp(3661.9) == "01:01:01"
 
 
@@ -79,13 +89,6 @@ def test_invalid_ranges_are_retried(transcript, brief, start, end):
     """A valid schema must still reference real, ordered source segments."""
     brief.clips[0].start_segment = start
     brief.clips[0].end_segment = end
-    with pytest.raises(ModelRetry):
-        validate_summary(Mock(deps=transcript), brief)
-
-
-def test_invalid_note_is_retried(transcript, brief):
-    """Producer notes cannot cite a segment the producer cannot find."""
-    brief.producer_notes[0].segment = 2
     with pytest.raises(ModelRetry):
         validate_summary(Mock(deps=transcript), brief)
 
@@ -101,4 +104,32 @@ def test_clip_cannot_end_in_partial_sentence(transcript, brief):
     """Whisper segments can end mid-thought; an editor needs a complete clip ending."""
     transcript.segments[1].text = "A complete sentence. Followed by an unfinished"
     with pytest.raises(ModelRetry, match="mid-sentence"):
+        validate_summary(Mock(deps=transcript), brief)
+
+
+def test_named_speaker_must_cite_their_own_introduction(transcript, brief):
+    transcript.segments[0].text = "I'm Alex."
+    transcript.segments[0].speaker = "speaker_1"
+    transcript.segments[1].speaker = "speaker_2"
+    person = SpeakerName(speaker="speaker_1", name="Alex", introduction_segment=0)
+    brief.speakers = [person]
+    assert validate_summary(Mock(deps=transcript), brief) == brief
+    assert "Alex (speaker_1)" in render_summary(brief, transcript)
+    person.introduction_segment = 1
+    with pytest.raises(ModelRetry, match="own labeled introduction"):
+        validate_summary(Mock(deps=transcript), brief)
+
+
+@pytest.mark.parametrize("invalid", ["unknown", "out_of_range", "duplicate"])
+def test_invalid_speaker_mappings_are_retried(transcript, brief, invalid):
+    transcript.segments[0].speaker = "speaker_1"
+    person = SpeakerName(speaker="speaker_1", name="Alex", introduction_segment=0)
+    brief.speakers = [person]
+    if invalid == "unknown":
+        person.speaker = "speaker_3"
+    elif invalid == "out_of_range":
+        person.introduction_segment = len(transcript.segments)
+    else:
+        brief.speakers.append(person)
+    with pytest.raises(ModelRetry, match="own labeled introduction"):
         validate_summary(Mock(deps=transcript), brief)

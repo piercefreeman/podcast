@@ -1,9 +1,17 @@
-.PHONY: lint lint-verify lint-python lint-python-verify lint-swift lint-swift-verify
+.PHONY: setup-diarizer lint lint-verify lint-python lint-python-verify lint-swift lint-swift-verify
 
 UV ?= uv
 SWIFTLINT ?= swiftlint
+FLUIDAUDIO_REVISION := 793a2c5a0e99705a55fefbad00e65ca684329349
 
 lint: lint-python lint-swift
+
+setup-diarizer:
+	mkdir -p .cache
+	test -d .cache/fluidaudio/.git || git clone --no-checkout --depth 1 https://github.com/FluidInference/FluidAudio.git .cache/fluidaudio
+	git -C .cache/fluidaudio fetch --depth 1 origin $(FLUIDAUDIO_REVISION)
+	git -C .cache/fluidaudio checkout --detach $(FLUIDAUDIO_REVISION)
+	swift build --package-path .cache/fluidaudio -c release --product fluidaudiocli --disable-default-traits
 
 lint-verify: lint-python-verify lint-swift-verify
 

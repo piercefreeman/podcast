@@ -48,6 +48,7 @@ def test_silent_audio_does_not_create_a_summary(tmp_path, monkeypatch):
     """Empty speech must fail explicitly rather than invite an invented episode."""
     import pytest
 
+    monkeypatch.setattr("podcast.transcribe.diarizer_binary", Mock())
     monkeypatch.setitem(
         sys.modules,
         "mlx_whisper",
@@ -59,6 +60,9 @@ def test_silent_audio_does_not_create_a_summary(tmp_path, monkeypatch):
                 }
             )
         ),
+    )
+    monkeypatch.setitem(
+        sys.modules, "mlx_whisper.audio", Mock(load_audio=Mock(return_value=[]))
     )
     with pytest.raises(ValueError, match="no speech"):
         transcribe(tmp_path / "silence.wav")

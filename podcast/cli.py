@@ -12,6 +12,16 @@ from .video import VideoSource
 @click.command()
 @click.argument("video")
 @click.option(
+    "--speakers",
+    type=click.IntRange(2, 3),
+    help="Known speaker count; otherwise detect between two and three.",
+)
+@click.option(
+    "--speaker-name",
+    multiple=True,
+    help="Expected name spelling for Whisper; repeat for each person.",
+)
+@click.option(
     "--output-dir",
     "-o",
     type=click.Path(path_type=Path),
@@ -19,8 +29,10 @@ from .video import VideoSource
     show_default=True,
     help="Directory for the transcript and producer brief (never overwrites).",
 )
-def main(video: str, output_dir: Path) -> None:
-    """Transcribe a local VIDEO or URL with Whisper, then summarize with Astra."""
+def main(
+    video: str, output_dir: Path, speakers: int | None, speaker_name: tuple[str, ...]
+) -> None:
+    """Transcribe and separate speakers in a local VIDEO or URL, then summarize."""
     load_dotenv(Path.cwd() / ".env")
     os.environ.setdefault("PYDANTIC_AI_NO_BANNER", "1")
     if not os.getenv("OPENAI_API_KEY"):
@@ -45,17 +57,17 @@ def main(video: str, output_dir: Path) -> None:
                 f"Output files already exist in {output_dir}; choose another --output-dir."
             )
         output_dir.mkdir(parents=True, exist_ok=True)
-        click.echo(
-            "Preparing video and transcribing locally with MLX Whisper turbo…", err=True
-        )
+        click.echo("Transcribing and identifying speakers locally…", err=True)
         with source.local_path() as path:
-            transcript = transcribe(path)
+            transcript = transcribe(
+                path, num_speakers=speakers, speaker_names=speaker_name
+            )
         with outputs[0].open("x") as file:
             file.write(transcript.model_dump_json(indent=2) + "\n")
         with outputs[1].open("x") as file:
             file.write(
                 "\n".join(
-                    f"[{timestamp(s.start)}–{timestamp(s.end)}] {s.text}"
+                    f"[{timestamp(s.start)}–{timestamp(s.end)}] {s.speaker or 'unknown'}: {s.text}"
                     for s in transcript.segments
                 )
                 + "\n"
